@@ -4,6 +4,7 @@ import sqlite3
 
 from app.core.clock import Clock
 from app.germplasm.accessions import AccessionService
+from app.germplasm.intake import IntakeService
 from app.germplasm.inventory import InventoryService
 from app.germplasm.quality import DistributionService, QualityService
 from app.germplasm.repository import GermplasmRepository
@@ -17,6 +18,7 @@ class GermplasmService:
         self.connection = connection
         self.repository = GermplasmRepository(connection)
         self.accessions = AccessionService(connection, clock)
+        self.intake = IntakeService(connection, clock)
         self.inventory = InventoryService(connection, clock)
         self.viability = ViabilityService(connection, clock)
         self.quality = QualityService(connection, clock)
@@ -31,4 +33,5 @@ class GermplasmService:
             "retest_schedules": self.repository.count_table("retest_schedules"),
             "quality_alerts": self.repository.count_table("quality_alerts"),
             "distribution_requests": self.repository.count_table("distribution_requests"),
+            "intake_batches": self.repository.count_table("intake_batches"),
         }

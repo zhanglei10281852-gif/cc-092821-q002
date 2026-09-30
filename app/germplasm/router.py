@@ -18,6 +18,13 @@ from app.germplasm.schemas import (
     DistributionDecision,
     HoldCreate,
     HoldRelease,
+    IntakeBatchClose,
+    IntakeBatchCreate,
+    IntakeBatchDecision,
+    IntakeItemCorrect,
+    IntakeItemDecision,
+    IntakeManifestImport,
+    IntakeReceiptImport,
     LocationCreate,
     LotCreate,
     MovePlacement,
@@ -120,6 +127,113 @@ def transition_accession(
 def accession_restrictions(accession_id: int, principal: Principal = Depends(current_principal)) -> dict:
     principal.require("accessions.read")
     return _service().accessions.restrictions_for(accession_id)
+
+
+@router.post("/intake-batches", status_code=201)
+def create_intake_batch(data: IntakeBatchCreate, principal: Principal = Depends(current_principal)) -> dict:
+    principal.require("intake.write")
+    with transaction(immediate=True) as connection:
+        return GermplasmService(connection).intake.create_batch(data.model_dump(mode="json"))
+
+
+@router.get("/intake-batches")
+def list_intake_batches(
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("intake.read")
+    items, total = _service().repository.list_intake_batches(status=status, limit=limit, offset=offset)
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/intake-batches/{batch_id}")
+def intake_batch_detail(batch_id: int, principal: Principal = Depends(current_principal)) -> dict:
+    principal.require("intake.read")
+    return _service().intake.batch_detail(batch_id)
+
+
+@router.post("/intake-batches/{batch_id}/imports/manifest", status_code=201)
+def import_intake_manifest(
+    batch_id: int,
+    data: IntakeManifestImport,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("intake.write")
+    rows = [row.model_dump(mode="json") for row in data.rows]
+    with transaction(immediate=True) as connection:
+        return GermplasmService(connection).intake.import_manifest(batch_id, rows, data.imported_by)
+
+
+@router.post("/intake-batches/{batch_id}/imports/receipts", status_code=201)
+def import_intake_receipts(
+    batch_id: int,
+    data: IntakeReceiptImport,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("intake.write")
+    rows = [row.model_dump(mode="json") for row in data.rows]
+    with transaction(immediate=True) as connection:
+        return GermplasmService(connection).intake.import_receipts(batch_id, rows, data.imported_by)
+
+
+@router.post("/intake-batches/{batch_id}/decisions")
+def decide_intake_batch(
+    batch_id: int,
+    data: IntakeBatchDecision,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("intake.review")
+    with transaction(immediate=True) as connection:
+        return GermplasmService(connection).intake.decide_batch(batch_id, data.model_dump(mode="json"))
+
+
+@router.post("/intake-batches/{batch_id}/close")
+def close_intake_batch(
+    batch_id: int,
+    data: IntakeBatchClose,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("intake.review")
+    with transaction(immediate=True) as connection:
+        return GermplasmService(connection).intake.close_batch(batch_id, data.model_dump(mode="json"))
+
+
+@router.get("/intake-batches/{batch_id}/summary")
+def intake_batch_summary(batch_id: int, principal: Principal = Depends(current_principal)) -> dict:
+    principal.require("intake.read")
+    return _service().intake.batch_summary(batch_id)
+
+
+@router.get("/intake-items/{item_id}")
+def intake_item_detail(item_id: int, principal: Principal = Depends(current_principal)) -> dict:
+    principal.require("intake.read")
+    return _service().intake.item_detail(item_id)
+
+
+@router.post("/intake-items/{item_id}/decision")
+def decide_intake_item(
+    item_id: int,
+    data: IntakeItemDecision,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("intake.review")
+    with transaction(immediate=True) as connection:
+        return GermplasmService(connection).intake.decide_item(item_id, data.model_dump(mode="json"))
+
+
+@router.post("/intake-items/{item_id}/correction")
+def correct_intake_item(
+    item_id: int,
+    data: IntakeItemCorrect,
+    principal: Principal = Depends(current_principal),
+) -> dict:
+    principal.require("intake.write")
+    with transaction(immediate=True) as connection:
+        return GermplasmService(connection).intake.correct_item(
+            item_id, data.model_dump(mode="json", exclude_unset=True)
+        )
 
 
 @router.post("/locations", status_code=201)

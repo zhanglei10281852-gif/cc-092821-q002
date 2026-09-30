@@ -12,7 +12,13 @@ JSON_COLUMNS = {
     "restrictions_json": "restrictions",
     "detail_json": "detail",
     "payload_json": "payload",
+    "discrepancy_json": "discrepancies",
+    "required_passport_fields_json": "required_passport_fields",
+    "summary_json": "summary",
 }
+
+
+LIST_JSON_COLUMNS = {"discrepancy_json", "required_passport_fields_json"}
 
 
 def record(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -22,10 +28,11 @@ def record(row: sqlite3.Row | None) -> dict[str, Any] | None:
     for column, target in JSON_COLUMNS.items():
         if column in data:
             raw = data.pop(column)
+            fallback: Any = [] if column in LIST_JSON_COLUMNS else {}
             try:
-                data[target] = json.loads(raw or "{}")
+                data[target] = json.loads(raw) if raw else fallback
             except json.JSONDecodeError:
-                data[target] = {}
+                data[target] = fallback
     return data
 
 
@@ -202,10 +209,70 @@ class GermplasmRepository:
         ).fetchall())
         return item
 
+    def source_by_code(self, source_code: str) -> dict[str, Any] | None:
+        return record(self.connection.execute(
+            "SELECT * FROM collection_sources WHERE source_code=?", (source_code,)
+        ).fetchone())
+
+    def require_intake_batch(self, batch_id: int) -> dict[str, Any]:
+        item = record(self.connection.execute("SELECT * FROM intake_batches WHERE id=?", (batch_id,)).fetchone())
+        if item is None:
+            raise NotFoundError("到库批次不存在")
+        return item
+
+    def intake_batch_by_no(self, batch_no: str) -> dict[str, Any] | None:
+        return record(self.connection.execute("SELECT * FROM intake_batches WHERE batch_no=?", (batch_no,)).fetchone())
+
+    def list_intake_batches(self, *, status: str | None, limit: int, offset: int) -> tuple[list[dict], int]:
+        clause = " WHERE status=?" if status else ""
+        params: list[Any] = [status] if status else []
+        total = int(self.connection.execute(f"SELECT COUNT(*) FROM intake_batches{clause}", params).fetchone()[0])
+        rows = self.connection.execute(
+            f"SELECT * FROM intake_batches{clause} ORDER BY created_at DESC,id DESC LIMIT ? OFFSET ?",
+            [*params, limit, offset],
+        ).fetchall()
+        return records(rows), total
+
+    def require_intake_item(self, item_id: int) -> dict[str, Any]:
+        item = record(self.connection.execute("SELECT * FROM intake_items WHERE id=?", (item_id,)).fetchone())
+        if item is None:
+            raise NotFoundError("到库明细不存在")
+        return item
+
+    def intake_item_by_accession(self, batch_id: int, accession_no: str) -> dict[str, Any] | None:
+        return record(self.connection.execute(
+            "SELECT * FROM intake_items WHERE batch_id=? AND accession_no=?", (batch_id, accession_no)
+        ).fetchone())
+
+    def list_intake_items(self, batch_id: int) -> list[dict[str, Any]]:
+        return records(self.connection.execute(
+            "SELECT * FROM intake_items WHERE batch_id=? ORDER BY id", (batch_id,)
+        ).fetchall())
+
+    def intake_import_by_hash(self, batch_id: int, kind: str, content_hash: str) -> dict[str, Any] | None:
+        return record(self.connection.execute(
+            "SELECT * FROM intake_imports WHERE batch_id=? AND import_kind=? AND content_hash=?",
+            (batch_id, kind, content_hash),
+        ).fetchone())
+
+    def list_intake_imports(self, batch_id: int) -> list[dict[str, Any]]:
+        return records(self.connection.execute(
+            "SELECT * FROM intake_imports WHERE batch_id=? ORDER BY id", (batch_id,)
+        ).fetchall())
+
+    def list_intake_events(self, batch_id: int, item_id: int | None = None) -> list[dict[str, Any]]:
+        if item_id is not None:
+            return records(self.connection.execute(
+                "SELECT * FROM intake_events WHERE batch_id=? AND item_id=? ORDER BY id", (batch_id, item_id)
+            ).fetchall())
+        return records(self.connection.execute(
+            "SELECT * FROM intake_events WHERE batch_id=? ORDER BY id", (batch_id,)
+        ).fetchall())
+
     def count_table(self, table: str) -> int:
         allowed = {
             "accessions", "seed_lots", "storage_locations", "viability_tests",
-            "retest_schedules", "quality_alerts", "distribution_requests",
+            "retest_schedules", "quality_alerts", "distribution_requests", "intake_batches",
         }
         if table not in allowed:
             raise ValueError("不允许统计该数据表")

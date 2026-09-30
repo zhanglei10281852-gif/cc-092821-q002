@@ -375,6 +375,76 @@ CREATE TABLE IF NOT EXISTS distribution_items (
     status TEXT NOT NULL DEFAULT 'requested' CHECK(status IN ('requested','allocated','fulfilled','unavailable')),
     UNIQUE(request_id,accession_id)
 );
+CREATE TABLE IF NOT EXISTS intake_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_no TEXT NOT NULL UNIQUE,
+    source_code TEXT NOT NULL,
+    acquisition_type TEXT NOT NULL DEFAULT '采集' CHECK(acquisition_type IN ('采集','引进','交换','捐赠','育种')),
+    harvest_year INTEGER NOT NULL CHECK(harvest_year BETWEEN 1800 AND 2200),
+    weight_tolerance_percent REAL NOT NULL DEFAULT 5 CHECK(weight_tolerance_percent BETWEEN 0 AND 100),
+    required_passport_fields_json TEXT NOT NULL DEFAULT '[]',
+    note TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','completed')),
+    version INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_intake_batches_status ON intake_batches(status,created_at);
+CREATE TABLE IF NOT EXISTS intake_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES intake_batches(id) ON DELETE CASCADE,
+    import_kind TEXT NOT NULL CHECK(import_kind IN ('manifest','receipt')),
+    content_hash TEXT NOT NULL,
+    row_count INTEGER NOT NULL,
+    applied_count INTEGER NOT NULL,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    imported_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(batch_id,import_kind,content_hash)
+);
+CREATE INDEX IF NOT EXISTS idx_intake_imports_batch ON intake_imports(batch_id,id);
+CREATE TABLE IF NOT EXISTS intake_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES intake_batches(id) ON DELETE CASCADE,
+    accession_no TEXT NOT NULL,
+    scientific_name TEXT NOT NULL DEFAULT '',
+    crop_name TEXT NOT NULL DEFAULT '',
+    cultivar_name TEXT NOT NULL DEFAULT '',
+    source_code TEXT NOT NULL DEFAULT '',
+    expected_weight_grams REAL,
+    received_weight_grams REAL,
+    manifest_received INTEGER NOT NULL DEFAULT 0 CHECK(manifest_received IN (0,1)),
+    receipt_received INTEGER NOT NULL DEFAULT 0 CHECK(receipt_received IN (0,1)),
+    permit_reference TEXT,
+    passport_json TEXT NOT NULL DEFAULT '{}',
+    discrepancy_json TEXT NOT NULL DEFAULT '[]',
+    suggested_action TEXT NOT NULL DEFAULT 'review' CHECK(suggested_action IN ('accept','quarantine','return','review')),
+    decision TEXT CHECK(decision IN ('accept','quarantine','return')),
+    decision_reason TEXT NOT NULL DEFAULT '',
+    decided_by TEXT,
+    decided_at TEXT,
+    accession_id INTEGER REFERENCES accessions(id),
+    lot_id INTEGER REFERENCES seed_lots(id),
+    hold_id INTEGER REFERENCES lot_holds(id),
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(batch_id,accession_no)
+);
+CREATE INDEX IF NOT EXISTS idx_intake_items_batch ON intake_items(batch_id,decision);
+CREATE TABLE IF NOT EXISTS intake_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES intake_batches(id) ON DELETE CASCADE,
+    item_id INTEGER REFERENCES intake_items(id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_intake_events_batch ON intake_events(batch_id,id);
+CREATE INDEX IF NOT EXISTS idx_intake_events_item ON intake_events(item_id,id);
+
 CREATE TABLE IF NOT EXISTS outbox_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_key TEXT NOT NULL UNIQUE,
@@ -405,6 +475,9 @@ PERMISSIONS = [
     ("jobs.run", "执行后台任务", "jobs", "run"),
     ("accessions.read", "查看种质材料", "accessions", "read"),
     ("accessions.write", "维护种质材料", "accessions", "write"),
+    ("intake.read", "查看到库批次", "intake", "read"),
+    ("intake.write", "登记到库批次", "intake", "write"),
+    ("intake.review", "复核到库批次", "intake", "review"),
     ("inventory.read", "查看库存", "inventory", "read"),
     ("inventory.write", "维护库存", "inventory", "write"),
     ("viability.read", "查看活力检测", "viability", "read"),
@@ -495,10 +568,12 @@ def init_db() -> None:
             (administrator, timestamp),
         )
         role_permissions = {
-            "registrar": ["accessions.read", "accessions.write", "inventory.read", "inventory.write"],
+            "registrar": ["accessions.read", "accessions.write", "inventory.read", "inventory.write",
+                          "intake.read", "intake.write"],
             "technician": ["accessions.read", "inventory.read", "viability.read", "viability.write"],
-            "curator": ["accessions.read", "inventory.read", "viability.read", "quality.review", "distribution.approve"],
-            "auditor": ["accessions.read", "inventory.read", "viability.read", "audit.read"],
+            "curator": ["accessions.read", "inventory.read", "viability.read", "quality.review",
+                        "distribution.approve", "intake.read", "intake.review"],
+            "auditor": ["accessions.read", "inventory.read", "viability.read", "audit.read", "intake.read"],
         }
         for role_code, codes in role_permissions.items():
             role_id = connection.execute("SELECT id FROM roles WHERE code=?", (role_code,)).fetchone()[0]

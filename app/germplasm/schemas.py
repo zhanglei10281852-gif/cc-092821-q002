@@ -297,6 +297,105 @@ class DistributionDecision(BaseModel):
     reason: str = Field(default="", max_length=500)
 
 
+class IntakeBatchCreate(BaseModel):
+    batch_no: str = Field(min_length=3, max_length=60)
+    source_code: str = Field(min_length=2, max_length=40)
+    acquisition_type: AcquisitionType = AcquisitionType.collection
+    harvest_year: int = Field(ge=1800, le=2200)
+    weight_tolerance_percent: float = Field(default=5.0, ge=0, le=100)
+    required_passport_fields: list[str] = Field(default_factory=list, max_length=50)
+    note: str = Field(default="", max_length=500)
+    created_by: str = Field(min_length=1, max_length=100)
+
+    @field_validator("batch_no")
+    @classmethod
+    def normalize_batch_no(cls, value: str) -> str:
+        normalized = value.strip().upper()
+        if " " in normalized:
+            raise ValueError("批次编号不能包含空格")
+        return normalized
+
+    @field_validator("source_code")
+    @classmethod
+    def normalize_intake_source_code(cls, value: str) -> str:
+        return value.strip().upper()
+
+    @field_validator("required_passport_fields")
+    @classmethod
+    def normalize_required_fields(cls, value: list[str]) -> list[str]:
+        normalized = []
+        for field in value:
+            name = str(field).strip()
+            if not name:
+                raise ValueError("必填护照字段名不能为空")
+            if name not in normalized:
+                normalized.append(name)
+        return normalized
+
+
+class IntakeManifestRow(BaseModel):
+    accession_no: str = Field(min_length=1, max_length=50)
+    scientific_name: str = Field(default="", max_length=200)
+    crop_name: str = Field(default="", max_length=100)
+    cultivar_name: str = Field(default="", max_length=150)
+    source_code: str | None = Field(default=None, max_length=40)
+    expected_weight_grams: float | None = Field(default=None, le=10_000_000)
+    permit_reference: str | None = Field(default=None, max_length=100)
+    passport: dict[str, Any] = Field(default_factory=dict)
+
+
+class IntakeReceiptRow(BaseModel):
+    accession_no: str = Field(min_length=1, max_length=50)
+    received_weight_grams: float | None = Field(default=None, le=10_000_000)
+
+
+class IntakeManifestImport(BaseModel):
+    rows: list[IntakeManifestRow] = Field(min_length=1, max_length=2000)
+    imported_by: str = Field(min_length=1, max_length=100)
+
+
+class IntakeReceiptImport(BaseModel):
+    rows: list[IntakeReceiptRow] = Field(min_length=1, max_length=2000)
+    imported_by: str = Field(min_length=1, max_length=100)
+
+
+class IntakeItemDecision(BaseModel):
+    decision: str = Field(pattern="^(accept|quarantine|return)$")
+    reason: str = Field(default="", max_length=500)
+    expected_version: int = Field(gt=0)
+    actor: str = Field(min_length=1, max_length=100)
+
+
+class IntakeBatchDecisionItem(BaseModel):
+    item_id: int = Field(gt=0)
+    expected_version: int = Field(gt=0)
+
+
+class IntakeBatchDecision(BaseModel):
+    decision: str = Field(pattern="^(accept|quarantine|return)$")
+    reason: str = Field(default="", max_length=500)
+    actor: str = Field(min_length=1, max_length=100)
+    items: list[IntakeBatchDecisionItem] = Field(min_length=1, max_length=2000)
+
+
+class IntakeItemCorrect(BaseModel):
+    scientific_name: str | None = Field(default=None, min_length=2, max_length=200)
+    crop_name: str | None = Field(default=None, min_length=1, max_length=100)
+    cultivar_name: str | None = Field(default=None, max_length=150)
+    source_code: str | None = Field(default=None, max_length=40)
+    expected_weight_grams: float | None = Field(default=None, gt=0, le=10_000_000)
+    received_weight_grams: float | None = Field(default=None, gt=0, le=10_000_000)
+    permit_reference: str | None = Field(default=None, max_length=100)
+    passport: dict[str, Any] | None = None
+    expected_version: int = Field(gt=0)
+    actor: str = Field(min_length=1, max_length=100)
+
+
+class IntakeBatchClose(BaseModel):
+    expected_version: int = Field(gt=0)
+    actor: str = Field(min_length=1, max_length=100)
+
+
 class Page(BaseModel):
     items: list[dict[str, Any]]
     total: int
