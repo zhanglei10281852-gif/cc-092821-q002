@@ -174,6 +174,97 @@ CREATE TABLE IF NOT EXISTS accession_events (
 );
 CREATE INDEX IF NOT EXISTS idx_accession_events ON accession_events(accession_id,id);
 
+CREATE TABLE IF NOT EXISTS intake_batches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_no TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '',
+    weight_tolerance_percent REAL NOT NULL DEFAULT 5 CHECK(weight_tolerance_percent BETWEEN 0 AND 100),
+    tolerance_grams REAL NOT NULL DEFAULT 1 CHECK(tolerance_grams >= 0),
+    required_passport_fields_json TEXT NOT NULL DEFAULT '[]',
+    status TEXT NOT NULL DEFAULT 'open' CHECK(status IN ('open','completed')),
+    version INTEGER NOT NULL DEFAULT 1,
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS intake_imports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES intake_batches(id) ON DELETE CASCADE,
+    import_kind TEXT NOT NULL CHECK(import_kind IN ('manifest','received')),
+    idempotency_key TEXT NOT NULL,
+    payload_hash TEXT NOT NULL,
+    total_rows INTEGER NOT NULL CHECK(total_rows >= 0),
+    inserted_count INTEGER NOT NULL DEFAULT 0,
+    updated_count INTEGER NOT NULL DEFAULT 0,
+    replayed_count INTEGER NOT NULL DEFAULT 0,
+    rejected_count INTEGER NOT NULL DEFAULT 0,
+    summary_json TEXT NOT NULL DEFAULT '{}',
+    imported_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(batch_id,idempotency_key)
+);
+CREATE INDEX IF NOT EXISTS idx_intake_imports_batch ON intake_imports(batch_id,id);
+CREATE TABLE IF NOT EXISTS intake_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES intake_batches(id) ON DELETE CASCADE,
+    accession_no TEXT NOT NULL,
+    source_id INTEGER REFERENCES collection_sources(id),
+    source_code TEXT,
+    scientific_name TEXT NOT NULL DEFAULT '',
+    crop_name TEXT NOT NULL DEFAULT '',
+    cultivar_name TEXT NOT NULL DEFAULT '',
+    acquisition_type TEXT NOT NULL DEFAULT '采集',
+    collected_on TEXT,
+    permit_reference TEXT,
+    expected_passport_json TEXT NOT NULL DEFAULT '{}',
+    actual_passport_json TEXT NOT NULL DEFAULT '{}',
+    expected_weight_grams REAL,
+    received_weight_grams REAL,
+    received_on TEXT,
+    has_manifest INTEGER NOT NULL DEFAULT 0 CHECK(has_manifest IN (0,1)),
+    has_received INTEGER NOT NULL DEFAULT 0 CHECK(has_received IN (0,1)),
+    diff_codes_json TEXT NOT NULL DEFAULT '[]',
+    diff_detail_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','accepted','quarantined','returned')),
+    item_version INTEGER NOT NULL DEFAULT 1,
+    decided_by TEXT,
+    decided_at TEXT,
+    decision_reason TEXT NOT NULL DEFAULT '',
+    accession_id INTEGER REFERENCES accessions(id),
+    seed_lot_id INTEGER REFERENCES seed_lots(id),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(batch_id,accession_no)
+);
+CREATE INDEX IF NOT EXISTS idx_intake_items_status ON intake_items(batch_id,status);
+CREATE TABLE IF NOT EXISTS intake_item_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_id INTEGER NOT NULL REFERENCES intake_items(id) ON DELETE CASCADE,
+    diff_codes_json TEXT NOT NULL DEFAULT '[]',
+    diff_detail_json TEXT NOT NULL DEFAULT '{}',
+    item_version INTEGER NOT NULL,
+    reason TEXT NOT NULL DEFAULT '',
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_intake_snapshots ON intake_item_snapshots(item_id,id);
+CREATE TABLE IF NOT EXISTS intake_decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    batch_id INTEGER NOT NULL REFERENCES intake_batches(id) ON DELETE CASCADE,
+    item_id INTEGER REFERENCES intake_items(id) ON DELETE SET NULL,
+    decision TEXT NOT NULL CHECK(decision IN ('accept','quarantine','return')),
+    scope TEXT NOT NULL CHECK(scope IN ('item','batch')),
+    reason TEXT NOT NULL DEFAULT '',
+    expected_version INTEGER,
+    result TEXT NOT NULL CHECK(result IN ('applied','version_conflict','already_decided','invalid')),
+    before_version INTEGER,
+    after_version INTEGER,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    decided_by TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_intake_decisions_batch ON intake_decisions(batch_id,id);
+
 CREATE TABLE IF NOT EXISTS storage_locations (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     location_code TEXT NOT NULL UNIQUE,
@@ -411,6 +502,9 @@ PERMISSIONS = [
     ("viability.write", "执行活力检测", "viability", "write"),
     ("quality.review", "复核质量结果", "quality", "review"),
     ("distribution.approve", "审批种质发放", "distribution", "approve"),
+    ("intake.import", "导入到库批次", "intake", "import"),
+    ("intake.review", "复核到库批次", "intake", "review"),
+    ("intake.read", "查看到库批次", "intake", "read"),
 ]
 
 
@@ -495,10 +589,16 @@ def init_db() -> None:
             (administrator, timestamp),
         )
         role_permissions = {
-            "registrar": ["accessions.read", "accessions.write", "inventory.read", "inventory.write"],
+            "registrar": [
+                "accessions.read", "accessions.write", "inventory.read", "inventory.write",
+                "intake.read", "intake.import",
+            ],
             "technician": ["accessions.read", "inventory.read", "viability.read", "viability.write"],
-            "curator": ["accessions.read", "inventory.read", "viability.read", "quality.review", "distribution.approve"],
-            "auditor": ["accessions.read", "inventory.read", "viability.read", "audit.read"],
+            "curator": [
+                "accessions.read", "inventory.read", "viability.read", "quality.review",
+                "distribution.approve", "intake.read", "intake.review",
+            ],
+            "auditor": ["accessions.read", "inventory.read", "viability.read", "audit.read", "intake.read"],
         }
         for role_code, codes in role_permissions.items():
             role_id = connection.execute("SELECT id FROM roles WHERE code=?", (role_code,)).fetchone()[0]

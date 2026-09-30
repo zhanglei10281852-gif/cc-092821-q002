@@ -45,6 +45,7 @@ python -m app.cli demo
 ## 业务边界
 
 - `app/germplasm/accessions.py` 管理来源、资源档案、护照信息与接收状态。
+- `app/germplasm/intake.py` 管理可恢复的到库批次：分批导入来源清单与实收记录、逐项差异、接收/隔离/退回复核及正式档案落地。
 - `app/germplasm/inventory.py` 管理批次、库位容量、容器摆放、移动、领用和冻结。
 - `app/germplasm/viability.py` 管理检测规程、取样、重复计数、活力结果与复检日程。
 - `app/germplasm/quality.py` 管理温湿度读数、偏离告警和种质发放审批。
